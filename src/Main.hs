@@ -74,10 +74,21 @@ writeHashes md5Files md5Sums = do
 
     replaceContents :: B.ByteString -> B.ByteString
     replaceContents content = M.foldrWithKey saneReplace content md5Sums
+
+    replaceContentsRelative :: FilePath -> B.ByteString -> B.ByteString
+    replaceContentsRelative fileName content =
+      let
+        fileDir = takeDirectory fileName
+        makeLocal = B.pack . removeRoot fileDir . B.unpack
+        fileMapLocal = M.fromList . map (bimap makeLocal makeLocal) . M.toList $ md5Sums
+      in
+        M.foldrWithKey saneReplace content fileMapLocal
+
   forM_ md5Files $ \fileName ->
     C.runConduitRes
     $  C.sourceFile fileName
     =$= C.map (B.toStrict . replaceContents . B.fromStrict)
+    =$= C.map (B.toStrict . replaceContentsRelative fileName . B.fromStrict) -- Limited support for relative links needed for bootstrap css files.
     =$= C.sinkFileCautious fileName
 
 removeRoot :: FilePath -> FilePath -> FilePath
