@@ -22,6 +22,8 @@ import           Data.List                           ((\\))
 import           Data.Conduit.Combinators (sinkList, sourceDirectoryDeep)
 import           System.Environment (getArgs, getProgName)
 import           Data.Bifunctor (bimap)
+import           System.Directory (renameFile, setCurrentDirectory)
+import           Data.Foldable (traverse_)
 
 blacklist :: [String]
 -- | list of extensions
@@ -45,8 +47,10 @@ md5sumAll root = do
   allContents <- traverse B.readFile allFiles
   let makeMapEntry path content =
         let
-          packedPath = B.pack . removeRoot root $ path
-          hashedPath = packedPath <> "?" <> B.pack (show (md5 content))
+          packedExtension = B.pack . takeExtensions $ path
+          packedPathNoExt = B.pack . removeRoot root . dropExtensions $ path
+          packedPath = packedPathNoExt <> packedExtension
+          hashedPath = packedPathNoExt <> "-" <> B.pack (show (md5 content)) <> packedExtension
         in
           (packedPath, hashedPath)
 
@@ -58,6 +62,9 @@ md5sumAll root = do
   let md5Files = filter ((`notElem` blacklist) . takeExtensions) allFiles
   writeHashes md5Files md5Sums
   writeHashes md5Files md5SumsEscaped
+  -- Rename instead of ?hash trick, because this also works for php includes:
+  setCurrentDirectory root
+  traverse_ (uncurry renameFile . bimap B.unpack B.unpack) md5SumList
 
 writeHashes :: [FilePath] -> M.Map B.ByteString B.ByteString -> IO ()
 writeHashes md5Files md5Sums = do
