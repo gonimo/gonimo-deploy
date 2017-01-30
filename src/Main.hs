@@ -25,6 +25,7 @@ import           Data.Bifunctor (bimap)
 import           System.Directory (renameFile, setCurrentDirectory)
 import           Data.Foldable (traverse_)
 
+
 blacklist :: [String]
 -- | list of extensions
 blacklist = [ ".jpg", ".jpeg", ".png", ".gif"
@@ -60,36 +61,60 @@ md5sumAll root = do
   let md5SumsEscaped' = M.fromList $ bimap doEscapes doEscapes <$> md5SumList -- ghcjs escapes /!
   let md5SumsEscaped = md5SumsEscaped' `M.difference` md5Sums -- Paths without a / are equal!
   let md5Files = filter ((`notElem` blacklist) . takeExtensions) allFiles
-  writeHashes md5Files md5Sums
-  writeHashes md5Files md5SumsEscaped
+  writeHashes (Just root) md5Files md5Sums
+  writeHashes Nothing md5Files md5SumsEscaped
   -- Rename instead of ?hash trick, because this also works for php includes:
   setCurrentDirectory root
   traverse_ (uncurry renameFile . bimap B.unpack B.unpack) md5SumList
 
-writeHashes :: [FilePath] -> M.Map B.ByteString B.ByteString -> IO ()
-writeHashes md5Files md5Sums = do
+writeHashes :: Maybe FilePath -> [FilePath] -> M.Map B.ByteString B.ByteString -> IO ()
+writeHashes mRoot md5Files md5Sums = do
   let
     saneReplace :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
     saneReplace needle rep haystack = B.replace (B.toStrict needle) rep haystack
 
-    replaceContents :: B.ByteString -> B.ByteString
-    replaceContents content = M.foldrWithKey saneReplace content md5Sums
+    replaceContents' :: B.ByteString -> B.ByteString
+    replaceContents' content = M.foldrWithKey saneReplace content md5Sums
 
     replaceContentsRelative :: FilePath -> B.ByteString -> B.ByteString
     replaceContentsRelative fileName content =
-      let
-        fileDir = takeDirectory fileName
-        makeLocal = B.pack . removeRoot fileDir . B.unpack
-        fileMapLocal = M.fromList . map (bimap makeLocal makeLocal) . M.toList $ md5Sums
-      in
-        M.foldrWithKey saneReplace content fileMapLocal
+      case mRoot of
+        Nothing -> content
+        Just root ->
+          let
+            fileDir = takeDirectory . makeRelative root $ fileName
+            makeLocal' = makeRelativeAlways fileDir
+            makeLocal = B.pack . makeLocal' . B.unpack
+            fileMapLocal = M.fromList . map (bimap makeLocal  makeLocal) . M.toList $ md5Sums
+          in
+            M.foldrWithKey saneReplace content fileMapLocal
+    -- This double replacement should be fine as long as all files have some extension
+    -- Limited support for relative links needed for bootstrap css files.
+    replaceContents :: FilePath -> B.ByteString -> B.ByteString
+    replaceContents fileName = replaceContentsRelative fileName . replaceContents'
 
   forM_ md5Files $ \fileName ->
     C.runConduitRes
     $  C.sourceFile fileName
-    =$= C.map (B.toStrict . replaceContents . B.fromStrict)
-    =$= C.map (B.toStrict . replaceContentsRelative fileName . B.fromStrict) -- Limited support for relative links needed for bootstrap css files.
+    =$= C.map (B.toStrict . replaceContents fileName . B.fromStrict)
     =$= C.sinkFileCautious fileName
 
 removeRoot :: FilePath -> FilePath -> FilePath
-removeRoot root path = path \\ addTrailingPathSeparator root -- Trailing path seperator needed because of weird </> behaviour!
+removeRoot = makeRelative
+
+makeRelativeAlways :: FilePath -> FilePath -> FilePath
+makeRelativeAlways base' path =
+  let
+    base = if base' == "." then "" else base'
+    splitPath' = map dropTrailingPathSeparator . splitPath
+    (goUp, goDown) = stripCommon (splitPath' base) (splitPath' path)
+    goUpCount = length goUp
+    goUpStr = joinPath $ replicate goUpCount ".."
+  in
+    normalise $ goUpStr </> joinPath goDown
+
+stripCommon :: Eq a => [a] -> [a] -> ([a], [a])
+stripCommon xs'@(x:xs) ys'@(y:ys)
+  | x == y = stripCommon xs ys
+  | otherwise = (xs', ys')
+stripCommon xs ys = (xs, ys)
