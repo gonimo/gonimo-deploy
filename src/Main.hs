@@ -53,7 +53,8 @@ md5sumAll root = do
   let md5SumList = zipWith makeMapEntry allFiles allContents
   let md5Sums = M.fromList md5SumList
   let doEscapes = B.replace "/" ("\\/" :: B.ByteString)
-  let md5SumsEscaped = M.fromList $ bimap doEscapes doEscapes <$> md5SumList -- ghcjs escapes /!
+  let md5SumsEscaped' = M.fromList $ bimap doEscapes doEscapes <$> md5SumList -- ghcjs escapes /!
+  let md5SumsEscaped = md5SumsEscaped' `M.difference` md5Sums -- Paths without a / are equal!
   let md5Files = filter ((`notElem` blacklist) . takeExtensions) allFiles
   writeHashes md5Files md5Sums
   writeHashes md5Files md5SumsEscaped
