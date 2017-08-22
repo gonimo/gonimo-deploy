@@ -26,12 +26,17 @@ import           System.Directory (renameFile, setCurrentDirectory)
 import           Data.Foldable (traverse_)
 
 
+-- Files that won't be scanned for URLs.
 blacklist :: [String]
 -- | list of extensions
 blacklist = [ ".jpg", ".jpeg", ".png", ".gif"
             , ".mp3", ".wav", ".ogg"
             , ".otf", ".woff", ".woff2", ".ttf", ".eot"
             ]
+
+-- Files that should not get renamed.
+dontRename :: [String]
+dontRename = [ ".php", ".txt" ]
 
 main :: IO ()
 main = do
@@ -45,7 +50,8 @@ main = do
 md5sumAll :: FilePath -> IO ()
 md5sumAll root = do
   allFiles <- C.runConduitRes $ sourceDirectoryDeep True root .| sinkList
-  allContents <- traverse B.readFile allFiles
+  let filesForRenaming = filter ((`notElem` dontRename) . takeExtensions) allFiles
+  allContents <- traverse B.readFile filesForRenaming
   let makeMapEntry path content =
         let
           packedExtension = B.pack . takeExtensions $ path
@@ -55,7 +61,7 @@ md5sumAll root = do
         in
           (packedPath, hashedPath)
 
-  let md5SumList = zipWith makeMapEntry allFiles allContents
+  let md5SumList = zipWith makeMapEntry filesForRenaming allContents
   let md5Sums = M.fromList md5SumList
   let doEscapes = B.replace "/" ("\\/" :: B.ByteString)
   let md5SumsEscaped' = M.fromList $ bimap doEscapes doEscapes <$> md5SumList -- ghcjs escapes /!
